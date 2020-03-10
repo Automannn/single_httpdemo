@@ -35,11 +35,15 @@ extern pThread pTailThread;
 extern char HtmlDir[512];
 
 bool InitSocket();//线程函数
+
 DWORD WINAPI AcceptThread(LPVOID lpParam); //接收线程
 DWORD WINAPI ClientThread(LPVOID lpParam); //客户端线程
+
 bool IoComplete(char* szRequest);     //数据包的校验函数
+
 bool AddClientList(SOCKET s,sockaddr_in addr);  //添加客户节点
 bool AddThreadList(HANDLE hThread,DWORD ThreadID); //添加线程节点
+
 bool ParseRequest(char* szRequest, char* szResponse, BOOL &bKeepAlive);//解析请求
 
 #endif //SINGLE_HTTPDEMO_SERVER_H

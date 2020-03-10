@@ -13,6 +13,9 @@ char HtmlDir[512];
 pNode pHead = NULL;
 pNode pTail = NULL;
 
+pThread pHeadThread;
+pThread pTailThread;
+
 DWORD WINAPI AcceptThread(LPVOID lpParam)   //接收线程
 {
     //创建一个监听套接字
@@ -163,6 +166,8 @@ DWORD WINAPI ClientThread(LPVOID lpParam)
         if(NetWorkEvent.lNetworkEvents & FD_CLOSE)
         {
             //在这里我没有处理，我们要将内存进行释放否则内存泄露
+            //todo: 需要释放的内存包括：socket句柄，thread句柄，以及thread句柄中所动态申请的资源
+            break;
         }
     }
     return 0;
