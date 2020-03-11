@@ -90,64 +90,86 @@ DWORD WINAPI AcceptThread(LPVOID lpParam)   //接收线程
     return 0;
 }
 
+DWORD WINAPI WorkerThread(LPVOID lpParam){
+    WSAEVENT Event = WSACreateEvent(); //该事件是与通信套接字关联以判断事件的种类
+    WSANETWORKEVENTS NetWorkEvent;
+
+    while (1){
+        pNode _ptr_tmp = pHead;
+        while (_ptr_tmp){
+            //将事件 与当前 的套接字 进行关联
+            WSAEventSelect(_ptr_tmp->s, Event, FD_READ | FD_WRITE | FD_CLOSE); //关联事件和套接字
+            DWORD dwIndex = 0;
+            dwIndex = WSAWaitForMultipleEvents(1,&Event,FALSE,100,FALSE);
+            dwIndex = dwIndex - WAIT_OBJECT_0;
+            if (dwIndex==WSA_WAIT_TIMEOUT||dwIndex==WSA_WAIT_FAILED)
+            {
+                //向后遍历
+                _ptr_tmp =_ptr_tmp->pNext;
+            }
+            // 分析什么网络事件产生
+            WSAEnumNetworkEvents(_ptr_tmp->s,Event,&NetWorkEvent);
+            //其他情况
+            if(!NetWorkEvent.lNetworkEvents)
+            {
+                //向后遍历
+                _ptr_tmp =_ptr_tmp->pNext;
+            }
+
+            if (NetWorkEvent.lNetworkEvents & FD_READ)
+            {
+                //开辟客户端线程用于通信
+                CreateThread(NULL,0,ClientThread,(LPVOID)_ptr_tmp,0, nullptr);
+            }
+
+
+            if(NetWorkEvent.lNetworkEvents & FD_CLOSE)
+            {
+                //在这里我没有处理，我们要将内存进行释放否则内存泄露
+                //todo: 需要释放的内存包括：socket句柄，thread句柄，以及thread句柄中所动态申请的资源
+                //向后遍历
+                _ptr_tmp =_ptr_tmp->pNext;
+            }
+        }
+    }
+
+
+}
+
+
 DWORD WINAPI ClientThread(LPVOID lpParam)
 {
     //我们将每个用户的信息以参数的形式传入到该线程
     pNode pTemp = (pNode)lpParam;
     SOCKET sClient = pTemp->s; //这是通信套接字
-    WSAEVENT Event = WSACreateEvent(); //该事件是与通信套接字关联以判断事件的种类
-    WSANETWORKEVENTS NetWorkEvent;
+
     char szRequest[1024]={0}; //请求报文
     char szResponse[1024]={0}; //响应报文
     BOOL bKeepAlive = FALSE; //是否持续连接
-    if(Event == WSA_INVALID_EVENT)
-    {
-        return -1;
-    }
-    int Ret = WSAEventSelect(sClient, Event, FD_READ | FD_WRITE | FD_CLOSE); //关联事件和套接字
-    DWORD dwIndex = 0;
-    while (1)
-    {
-        dwIndex = WSAWaitForMultipleEvents(1,&Event,FALSE,WSA_INFINITE,FALSE);
-        dwIndex = dwIndex - WAIT_OBJECT_0;
-        if (dwIndex==WSA_WAIT_TIMEOUT||dwIndex==WSA_WAIT_FAILED)
-        {
-            continue;
-        }
-        // 分析什么网络事件产生
-        Ret = WSAEnumNetworkEvents(sClient,Event,&NetWorkEvent);
-        //其他情况
-        if(!NetWorkEvent.lNetworkEvents)
-        {
-            continue;
-        }
-        if (NetWorkEvent.lNetworkEvents & FD_READ) //这里很有意思的
-        {
-            DWORD NumberOfBytesRecvd;
-            WSABUF Buffers;
-            DWORD dwBufferCount = 1;
-            char szBuffer[MAX_BUFFER];
-            DWORD Flags = 0;
-            Buffers.buf = szBuffer;
-            Buffers.len = MAX_BUFFER;
-            Ret = WSARecv(sClient,&Buffers,dwBufferCount,&NumberOfBytesRecvd,&Flags,NULL,NULL);
-            //我们在这里要检测是否得到的完整请求
-            memcpy(szRequest,szBuffer,NumberOfBytesRecvd);
-            if (!IoComplete(szRequest)) //校验数据包
-            {
-                continue;
-            }
-            if (!ParseRequest(szRequest, szResponse, bKeepAlive)) //分析数据包
-            {
-                //我在这里就进行了简单的处理
-                continue;
-            }
-            DWORD NumberOfBytesSent = 0;
-            DWORD dwBytesSent = 0;
-            //发送响应到客户端
-            do
-            {
-                Buffers.len = (strlen(szResponse) - dwBytesSent) >= SENDBLOCK ? SENDBLOCK : strlen(szResponse) - dwBytesSent;
+    DWORD NumberOfBytesRecvd;
+    WSABUF Buffers;
+    DWORD dwBufferCount = 1;
+    char szBuffer[MAX_BUFFER];
+    DWORD Flags = 0;
+    Buffers.buf = szBuffer;
+    Buffers.len = MAX_BUFFER;
+    DWORD Ret = WSARecv(sClient,&Buffers,dwBufferCount,&NumberOfBytesRecvd,&Flags,NULL,NULL);
+    //我们在这里要检测是否得到的完整请求
+    memcpy(szRequest,szBuffer,NumberOfBytesRecvd);
+    if (!IoComplete(szRequest)) //校验数据包
+     {
+      //todo: 检验读取时数据包是否完成
+     }
+     if (!ParseRequest(szRequest, szResponse, bKeepAlive)) //分析数据包
+     {
+         //我在这里就进行了简单的处理
+       //todo: 处理 响应失败
+      }
+      DWORD NumberOfBytesSent = 0;
+      DWORD dwBytesSent = 0;
+      //发送响应到客户端
+      do{
+         Buffers.len = (strlen(szResponse) - dwBytesSent) >= SENDBLOCK ? SENDBLOCK : strlen(szResponse) - dwBytesSent;
                 Buffers.buf = (char*)((long long)szResponse + dwBytesSent);
                 Ret = WSASend(
                         sClient,
@@ -160,16 +182,7 @@ DWORD WINAPI ClientThread(LPVOID lpParam)
                 if(SOCKET_ERROR != Ret)
                     dwBytesSent += NumberOfBytesSent;
             }
-            while((dwBytesSent < strlen(szResponse)) && SOCKET_ERROR != Ret);
-        }
-
-        if(NetWorkEvent.lNetworkEvents & FD_CLOSE)
-        {
-            //在这里我没有处理，我们要将内存进行释放否则内存泄露
-            //todo: 需要释放的内存包括：socket句柄，thread句柄，以及thread句柄中所动态申请的资源
-            break;
-        }
-    }
+      while((dwBytesSent < strlen(szResponse)) && SOCKET_ERROR != Ret);
     return 0;
 }
 
@@ -192,6 +205,8 @@ bool AddClientList(SOCKET s,sockaddr_in addr)
     pNode pTemp = (pNode)malloc(sizeof(Node));
     HANDLE hThread = NULL;
     DWORD ThreadID = 0;
+
+    //todo:这里需要加锁  用于保证线程安全
     if (pTemp==NULL)
     {
         printf("No Memory\n");
@@ -211,46 +226,8 @@ bool AddClientList(SOCKET s,sockaddr_in addr)
             pTail->pNext = pTemp;
             pTail = pTail->pNext;
         }
-        //我们要为用户开辟新的线程
-        hThread = CreateThread(NULL,0,ClientThread,(LPVOID)pTemp,0,&ThreadID);
-        if (hThread==NULL)
-        {
-            free(pTemp);
-            return false;
-        }
-        if (!AddThreadList(hThread,ThreadID))
-        {
-            free(pTemp);
-            return false;
-        }
-    }
     return true;
 }
-
-bool AddThreadList(HANDLE hThread,DWORD ThreadID)
-{
-    pThread pTemp = (pThread)malloc(sizeof(Thread));
-    if (pTemp==NULL)
-    {
-        printf("No Memory\n");
-        return false;
-    }
-    else
-    {
-        pTemp->hThread = hThread;
-        pTemp->ThreadID = ThreadID;
-        pTemp->pNext = NULL;
-        if (pHeadThread==NULL)
-        {
-            pHeadThread = pTailThread = pTemp;
-        }
-        else
-        {
-            pTailThread->pNext = pTemp;
-            pTailThread = pTailThread->pNext;
-        }
-    }
-    return true;
 }
 
 //分析数据包
